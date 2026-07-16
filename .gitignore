@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+*.dump
+*.tgz
+*.tar
+*.key
+*.pem
+secrets/

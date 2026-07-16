@@ -1,0 +1,158 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CUE
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install cuelang.org/go/cmd/cue@v0.17.0
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Generate deployment configuration
+        run: ./tools/generate.sh "$RUNNER_TEMP/generated"
+      - name: Validate deployment configuration
+        run: |
+          set -eu
+          sh -n ops/*.sh tools/*.sh
+          cue fmt config/*.cue
+          git diff --exit-code -- config
+          git diff --check
+          for host in primary secondary; do
+            dir="$RUNNER_TEMP/generated/$host"
+            docker compose --env-file "$dir/.env.example" -f "$dir/compose.yaml" config --format json > "$RUNNER_TEMP/$host.json"
+            jq -e 'all(.services[]; .pull_policy == "never")' "$RUNNER_TEMP/$host.json" >/dev/null
+            jq -r '.services[].image' "$RUNNER_TEMP/$host.json" | sort -u > "$RUNNER_TEMP/$host.compose-images"
+            awk -F '|' 'NF && $1 !~ /^#/ { print $2 }' "$dir/images.txt" | sort -u > "$RUNNER_TEMP/$host.manifest-images"
+            diff -u "$RUNNER_TEMP/$host.compose-images" "$RUNNER_TEMP/$host.manifest-images"
+            while IFS= read -r app; do
+              [ -n "$app" ] || continue
+              test -f "$dir/$app.env.example"
+              for key in DB_NAME DB_USER DB_PASSWORD DATABASE_URL; do
+                grep -q "^${key}=" "$dir/$app.env.example"
+              done
+            done < "$dir/databases.txt"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generated-config
+          path: ${{ runner.temp }}/generated
+          include-hidden-files: true
+          retention-days: 1
+
+  deploy:
+    name: Deploy ${{ matrix.name }}
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: primary
+            name: Primary
+            ssh_key: PRIMARY_SSH_KEY
+            ssh_host: PRIMARY_HOST
+            ssh_port: PRIMARY_PORT
+            ssh_user: PRIMARY_USER
+            sudo: sudo
+          - host: secondary
+            name: Secondary
+            ssh_key: SECONDARY_SSH_KEY
+            ssh_host: SECONDARY_HOST
+            ssh_port: SECONDARY_PORT
+            ssh_user: SECONDARY_USER
+            sudo: sudo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: generated-config
+          path: ${{ runner.temp }}/generated
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ vars.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets[matrix.ssh_key] }}
+          HOST: ${{ vars[matrix.ssh_host] }}
+          PORT: ${{ vars[matrix.ssh_port] }}
+        run: |
+          install -d -m 700 ~/.ssh
+          install -m 600 /dev/null ~/.ssh/id_ed25519
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
+      - name: Upload generated release
+        env:
+          HOST: ${{ vars[matrix.ssh_host] }}
+          PORT: ${{ vars[matrix.ssh_port] }}
+          USER: ${{ vars[matrix.ssh_user] }}
+          REMOTE_SUDO: ${{ matrix.sudo }}
+          DEPLOY_HOST: ${{ matrix.host }}
+        run: |
+          release="$RUNNER_TEMP/release"
+          remote_release="/srv/homelab/releases/$GITHUB_SHA"
+          install -d "$release/$DEPLOY_HOST"
+          cp -a "$RUNNER_TEMP/generated/$DEPLOY_HOST/." "$release/$DEPLOY_HOST/"
+          install -m 755 ops/deploy.sh "$release/deploy.sh"
+          install -m 755 ops/preflight.sh "$release/preflight.sh"
+          tar -C "$release" -czf "$RUNNER_TEMP/release.tgz" .
+          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO install -d -m 755 '$remote_release'"
+          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO tar --no-same-owner -xzf - -C '$remote_release'" < "$RUNNER_TEMP/release.tgz"
+          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO ln -sfn '$remote_release/$DEPLOY_HOST' /srv/homelab/candidate"
+      - name: Check environment readiness
+        id: readiness
+        env:
+          HOST: ${{ vars[matrix.ssh_host] }}
+          PORT: ${{ vars[matrix.ssh_port] }}
+          USER: ${{ vars[matrix.ssh_user] }}
+          REMOTE_SUDO: ${{ matrix.sudo }}
+          DEPLOY_HOST: ${{ matrix.host }}
+        run: |
+          remote_release="/srv/homelab/releases/$GITHUB_SHA"
+          set +e
+          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '$remote_release/preflight.sh' '$DEPLOY_HOST' '$remote_release/$DEPLOY_HOST' env-only"
+          status=$?
+          set -e
+          case "$status" in
+            0) echo "ready=true" >> "$GITHUB_OUTPUT" ;;
+            10)
+              echo "ready=false" >> "$GITHUB_OUTPUT"
+              echo "### $DEPLOY_HOST 等待生产 env" >> "$GITHUB_STEP_SUMMARY"
+              echo "Release 已上传，当前容器未改动。请从 /srv/homelab/candidate 创建 env 后手动重跑 Deploy。" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *) exit "$status" ;;
+          esac
+      - name: Transfer images over SSH
+        if: steps.readiness.outputs.ready == 'true'
+        env:
+          HOST: ${{ vars[matrix.ssh_host] }}
+          PORT: ${{ vars[matrix.ssh_port] }}
+          USER: ${{ vars[matrix.ssh_user] }}
+          REMOTE_SUDO: ${{ matrix.sudo }}
+        run: ./ops/transfer-images.sh "$RUNNER_TEMP/generated/${{ matrix.host }}/images.txt" "$USER@$HOST" "$PORT" "$REMOTE_SUDO"
+      - name: Deploy exact revision
+        if: steps.readiness.outputs.ready == 'true'
+        env:
+          HOST: ${{ vars[matrix.ssh_host] }}
+          PORT: ${{ vars[matrix.ssh_port] }}
+          USER: ${{ vars[matrix.ssh_user] }}
+          REMOTE_SUDO: ${{ matrix.sudo }}
+        run: ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '/srv/homelab/releases/$GITHUB_SHA/deploy.sh' '${{ matrix.host }}' '$GITHUB_SHA' '/srv/homelab/releases/$GITHUB_SHA/${{ matrix.host }}'"
+      - name: Deployment pending environment configuration
+        if: steps.readiness.outputs.ready == 'false'
+        run: echo "${{ matrix.name }} release uploaded; deployment intentionally skipped until env is ready."
