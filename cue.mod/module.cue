@@ -1,2 +1,2 @@
-module: "github.com/example/homelab-template"
+module: "github.com/honahec/homelab"
 language: version: "v0.17.0"

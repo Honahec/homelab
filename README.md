@@ -1,4 +1,4 @@
-# Homelab Deployment Template
+# Homelab Deployment
 
 用 CUE 维护多台服务器的 Docker Compose 配置，通过 GitHub Actions 生成部署产物、传输固定版本镜像，并经 SSH 发布到服务器。仓库只保存配置结构和环境变量示例；密码、Token 与私钥始终留在 GitHub Secrets 或服务器 `/srv/homelab/env/`。
 
@@ -47,9 +47,18 @@ GOBIN="$HOME/.local/bin" go install cuelang.org/go/cmd/cue@v0.17.0
 cue version
 ```
 
-## 1. 创建自己的仓库
+## 1. 创建自己的生产仓库
 
-Fork 本仓库，或从模板复制后初始化 Git。首先替换示例内容：
+建议让私有生产仓库直接基于本仓库创建，这样公共部署框架可以作为普通 Git upstream 持续合并：
+
+```bash
+git clone https://github.com/Honahec/homelab.git homelab-prod
+cd homelab-prod
+git remote rename origin upstream
+gh repo create YOUR_NAME/homelab-prod --private --source=. --remote=origin --push
+```
+
+之后在私有仓库中替换示例内容：
 
 ```bash
 rg 'example\.com|ops@example\.com' config README.md
@@ -62,6 +71,42 @@ rg 'example\.com|ops@example\.com' config README.md
 - 不需要第二台服务器时，同时从 `config/schema.cue`、`tools/generate.sh` 和两个 workflow 中删除 `secondary`。
 
 示例域名不会为你工作，部署前必须换成自己控制的域名并配置 DNS。
+
+### 从公共仓库同步更新
+
+私有仓库保留两个 remote：
+
+```text
+origin    -> 你的私有生产仓库
+upstream  -> Honahec/homelab
+```
+
+合并公共更新：
+
+```bash
+git fetch upstream
+git switch main
+git merge --no-ff upstream/main
+```
+
+公共框架和私有配置修改不同文件时会自动合并；双方修改同一位置时，Git 会要求你明确解决冲突。解决、验证后再推送到私有仓库：
+
+```bash
+cue vet ./config
+sh -n ops/*.sh tools/*.sh
+git push origin main
+```
+
+如果已有私有仓库与本仓库历史无关，可以只执行一次历史连接，同时保留当前生产文件：
+
+```bash
+git remote add upstream https://github.com/Honahec/homelab.git
+git fetch upstream
+git merge --allow-unrelated-histories -s ours upstream/main \
+  -m "chore: connect public homelab upstream"
+```
+
+完成这次连接后，后续更新使用普通的 `git merge upstream/main`，不再需要 `--allow-unrelated-histories` 或 `-s ours`。
 
 ## 2. 本地配置与验证
 
@@ -103,7 +148,7 @@ sudo install -d -m 700 /srv/homelab/backups
 sudo git clone https://github.com/YOUR_NAME/YOUR_REPO.git /srv/homelab/stack
 ```
 
-为每台主机创建主机级 env。模板当前没有主机变量，因此文件可以为空，但必须存在且权限为 `600`：
+为每台主机创建主机级 env。示例配置当前没有主机变量，因此文件可以为空，但必须存在且权限为 `600`：
 
 ```bash
 # primary 服务器
