@@ -49,4 +49,5 @@ if docker compose --env-file "$env_file" -f "$compose" config --services | grep 
     caddy reload --address 127.0.0.1:2019 --config /etc/caddy/Caddyfile
 fi
 "$stack/ops/verify.sh" "$host" "$config"
+"$stack/ops/cleanup-images.sh" "$host" "$config"
 ln -sfn "$config" /srv/homelab/current
