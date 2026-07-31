@@ -22,7 +22,8 @@ jobs:
           go build -o "$RUNNER_TEMP/bin/homelab" ./cmd/homelab
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Generate deployment configuration
-        run: "$RUNNER_TEMP/bin/homelab" generate --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/generated" --hosts primary,secondary
+        run: |
+          "$RUNNER_TEMP/bin/homelab" generate --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/generated" --hosts primary,secondary
       - name: Validate deployment configuration
         run: |
           set -eu
@@ -147,7 +148,8 @@ jobs:
           PORT: ${{ vars[matrix.ssh_port] }}
           USER: ${{ vars[matrix.ssh_user] }}
           REMOTE_SUDO: ${{ matrix.sudo }}
-        run: "$RUNNER_TEMP/homelab" transfer-images --manifest "$RUNNER_TEMP/generated/${{ matrix.host }}/images.txt" --destination "$USER@$HOST" --port "$PORT" --sudo "$REMOTE_SUDO"
+        run: |
+          "$RUNNER_TEMP/homelab" transfer-images --manifest "$RUNNER_TEMP/generated/${{ matrix.host }}/images.txt" --destination "$USER@$HOST" --port "$PORT" --sudo "$REMOTE_SUDO"
       - name: Deploy exact revision
         if: steps.readiness.outputs.ready == 'true'
         env:
