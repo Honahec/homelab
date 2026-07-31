@@ -10,6 +10,8 @@ import (
 	target:           string & !=""
 	_sourcePinned:    true
 	_sourcePinned:    strings.Contains(source, "@sha256:") || strings.Contains(source, ":sha-")
+	_targetTagged:    true
+	_targetTagged:    target =~ "(^|.*/)[^/:]+:[^/:]+$"
 	_targetImmutable: true
 	_targetImmutable: !strings.Contains(target, ":latest")
 }

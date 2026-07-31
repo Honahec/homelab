@@ -29,3 +29,11 @@ func TestSplitHosts(t *testing.T) {
 		t.Fatalf("splitHosts() = %#v, want %#v", got, want)
 	}
 }
+
+func TestShellQuote(t *testing.T) {
+	got := shellQuote("a'b")
+	want := `'a'"'"'b'`
+	if got != want {
+		t.Fatalf("shellQuote() = %q, want %q", got, want)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -40,6 +41,8 @@ type generatedConfig struct {
 	Caddy       caddyConfig                  `json:"caddy"`
 	EnvExamples map[string]map[string]string `json:"envExamples"`
 }
+
+var imageReferencePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@-]*$`)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -82,6 +85,9 @@ func generate(args []string) error {
 		return err
 	}
 	*root = absoluteRoot
+	if err := checkCUEVersion(); err != nil {
+		return err
+	}
 	if err := run(*root, "cue", "vet", filepath.Join(*root, "config")); err != nil {
 		return err
 	}
@@ -171,6 +177,9 @@ func transferImages(args []string) error {
 			return fmt.Errorf("invalid image manifest line: %q", line)
 		}
 		source, target := parts[0], parts[1]
+		if !imageReferencePattern.MatchString(source) {
+			return fmt.Errorf("invalid source image reference: %s", source)
+		}
 		if err := validateTarget(target); err != nil {
 			return err
 		}
@@ -197,6 +206,9 @@ func transferImages(args []string) error {
 }
 
 func validateTarget(target string) error {
+	if !imageReferencePattern.MatchString(target) {
+		return fmt.Errorf("invalid target image reference: %s", target)
+	}
 	if strings.Contains(target, "@") {
 		return fmt.Errorf("target image must use an explicit tag for docker save/load: %s", target)
 	}
@@ -209,8 +221,8 @@ func validateTarget(target string) error {
 
 func imageExists(destination, port, sudo, target string) bool {
 	args := []string{"-n", "-p", port, destination}
-	args = append(args, shellWords(sudo)...)
-	args = append(args, "docker", "image", "inspect", target)
+	command := strings.TrimSpace(sudo + " docker image inspect " + shellQuote(target))
+	args = append(args, command)
 	return exec.Command("ssh", args...).Run() == nil
 }
 
@@ -233,8 +245,8 @@ func saveAndLoad(targets []string, destination, port, sudo string) error {
 		return err
 	}
 	args := []string{"-p", port, destination}
-	args = append(args, shellWords(sudo)...)
-	args = append(args, "sh", "-c", "gunzip | docker load")
+	command := strings.TrimSpace(sudo + " sh -c " + shellQuote("gunzip | docker load"))
+	args = append(args, command)
 	remote := exec.Command("ssh", args...)
 	remote.Stdin = gzipOutput
 	remote.Stdout = os.Stdout
@@ -255,6 +267,19 @@ func cueExport(root, expression, format string) (string, error) {
 		return "", commandError(cmd, err)
 	}
 	return string(output), nil
+}
+
+func checkCUEVersion() error {
+	cmd := exec.Command("cue", "version")
+	output, err := cmd.Output()
+	if err != nil {
+		return commandError(cmd, err)
+	}
+	firstLine, _, _ := strings.Cut(string(output), "\n")
+	if firstLine != "cue version v0.17.0" {
+		return fmt.Errorf("CUE v0.17.0 required, found %q", firstLine)
+	}
+	return nil
 }
 
 func run(dir, name string, args ...string) error {
@@ -328,11 +353,8 @@ func splitHosts(value string) []string {
 	return hosts
 }
 
-func shellWords(value string) []string {
-	if value == "" {
-		return nil
-	}
-	return strings.Fields(value)
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func fatalf(format string, args ...any) {
