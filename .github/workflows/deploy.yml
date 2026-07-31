@@ -69,6 +69,7 @@ jobs:
             ssh_port: PRIMARY_PORT
             ssh_user: PRIMARY_USER
             sudo: sudo
+            min_free_kb: 4194304
           - host: secondary
             name: Secondary
             ssh_key: SECONDARY_SSH_KEY
@@ -76,10 +77,11 @@ jobs:
             ssh_port: SECONDARY_PORT
             ssh_user: SECONDARY_USER
             sudo: sudo
+            min_free_kb: 4194304
     steps:
       - uses: actions/checkout@v5
       - name: Build homelab CLI
-        run: go build -o "$RUNNER_TEMP/homelab" ./cmd/homelab
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$RUNNER_TEMP/homelab" ./cmd/homelab
       - uses: actions/download-artifact@v4
         with:
           name: generated-config
@@ -112,8 +114,7 @@ jobs:
           remote_release="/srv/homelab/releases/$GITHUB_SHA"
           install -d "$release/$DEPLOY_HOST"
           cp -a "$RUNNER_TEMP/generated/$DEPLOY_HOST/." "$release/$DEPLOY_HOST/"
-          install -m 755 ops/deploy.sh "$release/deploy.sh"
-          install -m 755 ops/preflight.sh "$release/preflight.sh"
+          install -m 755 "$RUNNER_TEMP/homelab" "$release/homelab"
           tar -C "$release" -czf "$RUNNER_TEMP/release.tgz" .
           ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO install -d -m 755 '$remote_release'"
           ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO tar --no-same-owner -xzf - -C '$remote_release'" < "$RUNNER_TEMP/release.tgz"
@@ -129,7 +130,7 @@ jobs:
         run: |
           remote_release="/srv/homelab/releases/$GITHUB_SHA"
           set +e
-          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '$remote_release/preflight.sh' '$DEPLOY_HOST' '$remote_release/$DEPLOY_HOST' env-only"
+          ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '$remote_release/homelab' preflight --host '$DEPLOY_HOST' --config '$remote_release/$DEPLOY_HOST' --mode env-only --min-free-kb '${{ matrix.min_free_kb }}'"
           status=$?
           set -e
           case "$status" in
@@ -157,7 +158,7 @@ jobs:
           PORT: ${{ vars[matrix.ssh_port] }}
           USER: ${{ vars[matrix.ssh_user] }}
           REMOTE_SUDO: ${{ matrix.sudo }}
-        run: ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '/srv/homelab/releases/$GITHUB_SHA/deploy.sh' '${{ matrix.host }}' '$GITHUB_SHA' '/srv/homelab/releases/$GITHUB_SHA/${{ matrix.host }}'"
+        run: ssh -p "$PORT" "$USER@$HOST" "$REMOTE_SUDO '/srv/homelab/releases/$GITHUB_SHA/homelab' deploy --host '${{ matrix.host }}' --revision '$GITHUB_SHA' --config '/srv/homelab/releases/$GITHUB_SHA/${{ matrix.host }}' --min-free-kb '${{ matrix.min_free_kb }}'"
       - name: Deployment pending environment configuration
         if: steps.readiness.outputs.ready == 'false'
         run: echo "${{ matrix.name }} release uploaded; deployment intentionally skipped until env is ready."

@@ -55,11 +55,21 @@ func main() {
 		err = generate(os.Args[2:])
 	case "transfer-images":
 		err = transferImages(os.Args[2:])
+	case "preflight":
+		err = preflight(os.Args[2:])
+	case "deploy":
+		err = deploy(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
 	if err != nil {
-		fatalf("%v", err)
+		code := 1
+		var coded *exitError
+		if errors.As(err, &coded) {
+			code = coded.code
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(code)
 	}
 }
 
