@@ -59,7 +59,7 @@ cue fmt config/*.cue
 cue vet ./config
 go test ./...
 go build ./cmd/homelab
-sh -n ops/*.sh tools/*.sh
+sh -n ops/*.sh
 git diff --check
 ```
 

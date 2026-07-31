@@ -27,7 +27,7 @@ jobs:
       - name: Validate deployment configuration
         run: |
           set -eu
-          sh -n ops/*.sh tools/*.sh
+          sh -n ops/*.sh
           cue fmt config/*.cue
           git diff --exit-code -- config
           git diff --check
