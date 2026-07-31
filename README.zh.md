@@ -57,11 +57,24 @@ GOBIN="$HOME/.local/bin" go install cuelang.org/go/cmd/cue@v0.17.0
 ```bash
 cue fmt config/*.cue
 cue vet ./config
+go test ./...
+go build ./cmd/homelab
 sh -n ops/*.sh tools/*.sh
 git diff --check
 ```
 
 `Validate` workflow 会在 push 和 pull request 时执行相同的配置检查。
+
+`homelab` CLI 负责配置生成和镜像传输。CUE 仍然是配置唯一来源，Go CLI
+替代了原来由 shell 完成的 JSON/YAML 解析和镜像传输编排：
+
+```bash
+go run ./cmd/homelab generate --output /tmp/homelab-generated \
+  --hosts primary,secondary
+go run ./cmd/homelab transfer-images \
+  --manifest /tmp/homelab-generated/primary/images.txt \
+  --destination deploy@example.com --port 22 --sudo sudo
+```
 
 ## 3. 初始化服务器
 

@@ -16,12 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install CUE
+      - name: Install CUE and build CLI
         run: |
           GOBIN="$RUNNER_TEMP/bin" go install cuelang.org/go/cmd/cue@v0.17.0
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          go build -o "$RUNNER_TEMP/bin/homelab" ./cmd/homelab
       - name: Generate deployment configuration
-        run: ./tools/generate.sh "$RUNNER_TEMP/generated"
+        run: "$RUNNER_TEMP/bin/homelab" generate --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/generated" --hosts primary,secondary
       - name: Validate deployment configuration
         run: |
           set -eu
@@ -76,6 +76,8 @@ jobs:
             sudo: sudo
     steps:
       - uses: actions/checkout@v5
+      - name: Build homelab CLI
+        run: go build -o "$RUNNER_TEMP/homelab" ./cmd/homelab
       - uses: actions/download-artifact@v4
         with:
           name: generated-config
@@ -144,7 +146,7 @@ jobs:
           PORT: ${{ vars[matrix.ssh_port] }}
           USER: ${{ vars[matrix.ssh_user] }}
           REMOTE_SUDO: ${{ matrix.sudo }}
-        run: ./ops/transfer-images.sh "$RUNNER_TEMP/generated/${{ matrix.host }}/images.txt" "$USER@$HOST" "$PORT" "$REMOTE_SUDO"
+        run: "$RUNNER_TEMP/homelab" transfer-images --manifest "$RUNNER_TEMP/generated/${{ matrix.host }}/images.txt" --destination "$USER@$HOST" --port "$PORT" --sudo "$REMOTE_SUDO"
       - name: Deploy exact revision
         if: steps.readiness.outputs.ready == 'true'
         env:

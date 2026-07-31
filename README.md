@@ -62,12 +62,26 @@ Run the checks:
 ```bash
 cue fmt config/*.cue
 cue vet ./config
+go test ./...
+go build ./cmd/homelab
 sh -n ops/*.sh tools/*.sh
 git diff --check
 ```
 
 The `Validate` workflow runs the same configuration checks on pushes and pull
 requests.
+
+The `homelab` CLI owns configuration generation and image transfer. It keeps
+CUE as the source of truth while replacing the local JSON/YAML parsing and
+image-transfer orchestration that used to live in shell scripts:
+
+```bash
+go run ./cmd/homelab generate --output /tmp/homelab-generated \
+  --hosts primary,secondary
+go run ./cmd/homelab transfer-images \
+  --manifest /tmp/homelab-generated/primary/images.txt \
+  --destination deploy@example.com --port 22 --sudo sudo
+```
 
 ## 3. Prepare each server
 
